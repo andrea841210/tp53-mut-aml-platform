@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -170,7 +169,7 @@ if run:
             st.error("No GDSC rows found.")
             st.stop()
 
-        mut_status = build_mutation_status(df_mut, gene_choice)
+        mut_status = build_mutation_status(df_mut, gene_name)
 
         if not col_depmap_in_gdsc:
             if df_map is None:
@@ -199,7 +198,7 @@ if run:
         ax.bar(plot_df[col_cell].astype(str), plot_df[col_ic50], color=colors)
         ax.set_xlabel("Cell line")
         ax.set_ylabel("IC50 (uM)")
-        ax.set_title(f"{drug_name} in {cancer_type} cell lines — {gene_choice} Mut (red) vs WT (blue)")
+        ax.set_title(f"{drug_name} in {cancer_type} cell lines — {gene_name} Mut (red) vs WT (blue)")
         ax.tick_params(axis='x', rotation=75)
         st.pyplot(fig)
 
@@ -216,3 +215,4 @@ else:
 
 st.markdown("---")
 st.caption("Debug strategy enabled: auto-inspection + fallback logic for DepMap_ID alignment and Mut/WT derivation.")
+
