@@ -3,8 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
-st.set_page_config(page_title="TP53 Node-1 Demo • LAML IC50 Explorer", layout="wide")
-st.title("TP53 Node-1 Demo • LAML IC50 Explorer")
+st.set_page_config(page_title="Node-1 Demo • LAML IC50 Explorer", layout="wide")
+st.title("Node-1 Demo • LAML IC50 Explorer")
 st.caption("Andrea × GPT Mirror Project — SO-06a debug build")
 
 # -------------------------------
@@ -215,3 +215,4 @@ else:
 
 st.markdown("---")
 st.caption("Debug strategy enabled: auto-inspection + fallback logic for DepMap_ID alignment and Mut/WT derivation.")
+
