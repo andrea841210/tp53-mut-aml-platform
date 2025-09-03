@@ -13,38 +13,51 @@ drug_data_file = st.file_uploader("Upload GDSC Drug Sensitivity CSV", type=["csv
 mutation_data_file = st.file_uploader("Upload CCLE Mutation CSV", type=["csv"])
 
 if drug_data_file and mutation_data_file:
-    # Load files
+    # Load and standardize column names
     if drug_data_file.name.endswith(".csv"):
         drug_data = pd.read_csv(drug_data_file)
     else:
         drug_data = pd.read_excel(drug_data_file)
-
     mutation_data = pd.read_csv(mutation_data_file)
-    # 標準化欄位名稱，避免 DepMap ID / DepMap_ID 不一致
-    mutation_data.columns = mutation_data.columns.str.replace(" ", "_")
 
-    # Filter for drug
-    drug_filtered = drug_data[drug_data["Drug Name"].str.lower() == drug_name.lower()].copy()
+    drug_data.columns = drug_data.columns.str.strip().str.replace(" ", "_")
+    mutation_data.columns = mutation_data.columns.str.strip().str.replace(" ", "_")
 
-    # Merge on DepMap_ID
-    merged = pd.merge(drug_filtered, mutation_data, on="DepMap_ID", how="left")
+    # Confirm merge key exists
+    if "DepMap_ID" not in drug_data.columns or "DepMap_ID" not in mutation_data.columns:
+        st.error("Error: 'DepMap_ID' column not found in both files. Please check your inputs.")
+    elif gene_name not in mutation_data.columns:
+        st.error(f"Error: Gene '{gene_name}' not found in mutation file columns.")
+    else:
+        # Filter for drug
+        drug_filtered = drug_data[drug_data["Drug_Name"].str.lower() == drug_name.lower()].copy()
 
-    # Label mutation status
-    merged["Mutation Status"] = merged[gene_name].apply(lambda x: "Mut" if pd.notna(x) and x != "WT" else "WT")
+        # Merge
+        merged = pd.merge(drug_filtered, mutation_data, on="DepMap_ID", how="left")
 
-    # Sort by IC50
-    merged.sort_values("IC50 (uM)", inplace=True)
+        # Label mutation status
+        merged["Mutation_Status"] = merged[gene_name].apply(
+            lambda x: "Mut" if pd.notna(x) and x != "WT" else "WT"
+        )
 
-    # Plot
-    fig, ax = plt.subplots(figsize=(10, 4))
-    colors = merged["Mutation Status"].map({"WT": "blue", "Mut": "red"})
-    ax.bar(merged["Cell Line Name"], merged["IC50 (uM)"], color=colors)
-    ax.set_ylabel("IC50 (uM)")
-    ax.set_title(f"{drug_name} Sensitivity in Cell Lines ({gene_name} Mutation Status)")
-    ax.tick_params(axis="x", rotation=90)
-    st.pyplot(fig)
+        # Sort
+        merged.sort_values("IC50_(uM)", inplace=True)
 
-    # Optional CSV export
-    st.download_button("Download Merged CSV", merged.to_csv(index=False), file_name="merged_output.csv", mime="text/csv")
+        # Plot
+        fig, ax = plt.subplots(figsize=(10, 4))
+        colors = merged["Mutation_Status"].map({"WT": "blue", "Mut": "red"})
+        ax.bar(merged["Cell_Line_Name"], merged["IC50_(uM)"], color=colors)
+        ax.set_ylabel("IC50 (uM)")
+        ax.set_title(f"{drug_name} Sensitivity by {gene_name} Mutation Status")
+        ax.tick_params(axis="x", rotation=90)
+        st.pyplot(fig)
+
+        # Download merged file
+        st.download_button(
+            label="Download Merged CSV",
+            data=merged.to_csv(index=False),
+            file_name="merged_output.csv",
+            mime="text/csv"
+        )
 else:
     st.info("Please upload both GDSC and Mutation CSV files.")
