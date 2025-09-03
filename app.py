@@ -1,13 +1,12 @@
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
 
-st.set_page_config(page_title="TP53 Node-1 Demo • LAML IC50 Explorer", layout="wide")
-st.title("TP53 Node-1 Demo • LAML IC50 Explorer")
 st.set_page_config(page_title="Node-1 Demo • LAML IC50 Explorer", layout="wide")
 st.title("Node-1 Demo • LAML IC50 Explorer")
-st.caption("Andrea × GPT Mirror Project — SO-06a debug build")
+st.caption("Andrea × GPT Mirror Project — SO-06b gene subset test build")
 
 # -------------------------------
 # Helpers
@@ -98,22 +97,7 @@ col_a, col_b = st.sidebar.columns(2)
 with col_a:
     drug_name = st.text_input("Drug name", value="Rapamycin")
 with col_b:
-    st.markdown("**Gene selection (single-gene test)**")
-
-# Independent dropdowns for TP53 / FLT3 / NPM1
-opt_tp53 = st.sidebar.selectbox("TP53", ["Analyze", "Skip"], index=0)
-opt_flt3 = st.sidebar.selectbox("FLT3", ["Skip", "Analyze"], index=0)
-opt_npm1 = st.sidebar.selectbox("NPM1", ["Skip", "Analyze"], index=0)
-
-# Determine selected gene (single active)
-selected = [g for g, o in [("TP53", opt_tp53), ("FLT3", opt_flt3), ("NPM1", opt_npm1)] if o == "Analyze"]
-if len(selected) == 0:
-    gene_name = "TP53"  # default fallback
-elif len(selected) > 1:
-    st.warning("Multiple genes selected; using the first one only for this test run.")
-    gene_name = selected[0]
-else:
-    gene_name = selected[0]
+    gene_name = st.selectbox("Gene name", ["TP53", "FLT3", "NPM1"], index=0)
 
 # --- helpers for reading file or path ---
 def read_any_table(obj):
@@ -186,7 +170,7 @@ if run:
             st.error("No GDSC rows found.")
             st.stop()
 
-        mut_status = build_mutation_status(df_mut, gene_name)
+        mut_status = build_mutation_status(df_mut, gene_choice)
 
         if not col_depmap_in_gdsc:
             if df_map is None:
@@ -215,7 +199,7 @@ if run:
         ax.bar(plot_df[col_cell].astype(str), plot_df[col_ic50], color=colors)
         ax.set_xlabel("Cell line")
         ax.set_ylabel("IC50 (uM)")
-        ax.set_title(f"{drug_name} in {cancer_type} cell lines — {gene_name} Mut (red) vs WT (blue)")
+        ax.set_title(f"{drug_name} in {cancer_type} cell lines — {gene_choice} Mut (red) vs WT (blue)")
         ax.tick_params(axis='x', rotation=75)
         st.pyplot(fig)
 
