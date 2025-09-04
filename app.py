@@ -181,7 +181,10 @@ if mode == "Lite (built-in)":
     mut_source  = DEFAULT_MUT_PATH
     map_source  = DEFAULT_MAP_PATH
     cancer_type = "LAML"
-    st.caption("Lite mode: built-in LAML data. You can change Drug; Cancer type is fixed to LAML.")
+    st.caption(
+        "Lite mode: built-in LAML data. Sources — GDSC1 (downloaded 2025-09), "
+        "CCLE mutation (DepMap 22Q2), Model mapper (DepMap 25Q2)."
+    )
 else:
     gdsc_source = gdsc_file
     mut_source  = mut_file
@@ -309,4 +312,5 @@ else:
     st.info("Upload files on the left (Advanced mode) or use built-in data (Lite mode), set parameters, choose subset mode, and click **Run**.")
 
 st.markdown("---")
-st.caption("SO-06c debug strategy: column auto-inspection + robust DepMap_ID alignment + single/multi-gene subset logic (AND).")
+st.caption("SO-06c debug strategy: column auto-inspection + robust DepMap_ID alignment + single/multi-gene subset logic (AND). Versions — GDSC1 (downloaded 2025-09), CCLE mutation (DepMap 22Q2), Model mapper (DepMap 25Q2).")
+
