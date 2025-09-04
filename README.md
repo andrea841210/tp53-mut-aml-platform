@@ -9,9 +9,9 @@ highlighting mutant (Mut) vs wild-type (WT) status for a given gene (e.g., TP53)
 
 ### 🔹 Lite Mode (default)
 - **Built-in dataset** (`data/` folder in this repo)
-  - GDSC1_LAML.xlsx
-  - CCLE_TP53.csv
-  - Model_DepMap.csv
+  - GDSC1_LAML.xlsx (downloaded 2025-09, GDSC1 portal; no official version, timestamp as reference)
+  - CCLE_TP53.csv (DepMap 22Q2 mutation calls)
+  - Model_DepMap.csv (DepMap 25Q2 sample info / mapper)
 - **Cancer type** is fixed to `LAML`
 - **Drug** and **Gene** are free text inputs
 - 👉 Easiest way to try: just type a drug (e.g., `Rapamycin`) and a gene (`TP53`), then click **Run**
