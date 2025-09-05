@@ -1,5 +1,5 @@
-# Node‑1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.2 — added column strip fix
+# Node-1 IC50 Explorer • Solid Tumors (KRAS track)
+# Streamlit app skeleton v0.3 — added Run button in sidebar
 
 from __future__ import annotations
 import os
@@ -11,8 +11,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Node‑1 IC50 Explorer — KRAS track", layout="wide")
-st.title("Node‑1 IC50 Explorer • Solid Tumors (KRAS track)")
+st.set_page_config(page_title="Node-1 IC50 Explorer — KRAS track", layout="wide")
+st.title("Node-1 IC50 Explorer • Solid Tumors (KRAS track)")
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 FILES = {
@@ -32,8 +32,8 @@ st.caption(
     f"versions: CCLE {FILES['CCLE'][1]}, Model {FILES['MODEL'][1]}, GDSC1 {FILES['GDSC1'][1]}"
 )
 
-DEFAULT_GENES = ["KRAS", "BRAF", "PIK3CA"]
-DEFAULT_TUMORS = ["CRC", "NSCLC", "PDAC"]
+DEFAULT_GENES = ["KRAS", "BRAF", "PIK3CA", "TP53", "STK11", "KEAP1", "SMAD4", "CDKN2A"]
+DEFAULT_TUMORS = ["CRC", "NSCLC", "PDAC", "BRCA", "SKCM", "GBM"]
 
 def find_col(df: pd.DataFrame, candidates: Iterable[str], *, required: bool = True) -> Optional[str]:
     for c in candidates:
@@ -84,7 +84,7 @@ def load_models(path: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def load_gdsc1(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
-    df = df.rename(columns=lambda x: x.strip())  # strip spaces from headers
+    df = df.rename(columns=lambda x: x.strip())
     rename_map = {}
     if "DepMap ID" in df.columns and "DepMap_ID" not in df.columns:
         rename_map["DepMap ID"] = "DepMap_ID"
@@ -111,6 +111,12 @@ def infer_onco_group(tcga_str: str) -> Optional[str]:
         return "NSCLC"
     if any(k in s for k in ["PAAD","PANCREAS","PANCREATIC"]):
         return "PDAC"
+    if any(k in s for k in ["BRCA","BREAST"]):
+        return "BRCA"
+    if any(k in s for k in ["SKCM","MELANOMA"]):
+        return "SKCM"
+    if any(k in s for k in ["GBM","GLIOBLASTOMA","BRAIN"]):
+        return "GBM"
     return None
 
 @st.cache_data(show_spinner=True)
@@ -139,6 +145,10 @@ with st.sidebar:
     tumors = st.multiselect("Cancer types", DEFAULT_TUMORS, default=[DEFAULT_TUMORS[0]])
     drug_query = st.text_input("Drug name contains (optional)", value="")
     top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=50, step=10)
+    run_button = st.button("Run")
+
+if not run_button:
+    st.stop()
 
 try:
     ccle = load_ccle_mutations(FILES["CCLE"][0])
