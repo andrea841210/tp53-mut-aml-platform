@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.8 — Collapse duplicates with fixed Median (no user option) + duplicate diagnostics
+# Streamlit app skeleton v0.9 — Median collapse (fixed) + duplicate diagnostics + optional raw replicates view
 
 from __future__ import annotations
 import os
@@ -264,9 +264,14 @@ try:
 except Exception:
     pass
 
-st.subheader("Filtered table")
-show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in joined.columns]
-st.dataframe(joined[show_cols], use_container_width=True, hide_index=True)
+st.subheader("Filtered table (Median-collapsed)")
+show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in plot_df.columns]
+st.dataframe(plot_df[show_cols], use_container_width=True, hide_index=True)
+
+# --- Raw replicates table (optional) ---
+with st.expander("Show raw replicates (before collapsing)"):
+    raw_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in joined.columns]
+    st.dataframe(joined[raw_cols], use_container_width=True, hide_index=True)
 
 st.subheader("IC50 distribution (lower is more sensitive)")
 if plot_df.empty:
