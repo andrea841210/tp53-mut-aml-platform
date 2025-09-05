@@ -271,6 +271,25 @@ try:
 except Exception:
     pass
 
+# Aggregation audit (for debugging differences vs. Sheets); folded by default
+with st.expander("Aggregation audit (median vs min/max, per cell line)", expanded=False):
+    try:
+        # work: pre-aggregate rows; joined: raw rows after filters
+        rep = joined.copy()
+        rep = rep[rep["IC50_uM"].notna()]
+        key_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification"] if c in rep.columns]
+        agg = rep.groupby(key_cols, as_index=False).agg(
+            n_reps=("IC50_uM","size"),
+            min_ic50=("IC50_uM","min"),
+            median_ic50=("IC50_uM","median"),
+            max_ic50=("IC50_uM","max")
+        ).sort_values("median_ic50")
+        # show only first 200 rows to keep UI light
+        st.dataframe(agg.head(200), use_container_width=True, hide_index=True)
+        st.caption("Audit view shows replicate count and min/median/max per (Drug, Cell line). Plot uses median; Sheets may resemble min.")
+    except Exception as e:
+        st.write("audit error:", e)
+
 st.subheader("IC50 distribution (lower is more sensitive)")
 # Limit chart to a smaller, readable subset; table below still uses Top N
 PLOT_CAP = 50
