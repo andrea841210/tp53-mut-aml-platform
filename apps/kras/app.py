@@ -1,24 +1,20 @@
 # Node‑1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.1 — mirrors LAML app structure, adapted for CRC/NSCLC/PDAC
-# Data versions: CCLE 22Q2, Model 25Q2, GDSC1 (as-downloaded)
+# Streamlit app skeleton v0.2 — added column strip fix
 
 from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Iterable, List, Optional, Set
+from typing import Iterable, Optional, Set
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-# ---------------------------
-# Config & constants
-# ---------------------------
 st.set_page_config(page_title="Node‑1 IC50 Explorer — KRAS track", layout="wide")
 st.title("Node‑1 IC50 Explorer • Solid Tumors (KRAS track)")
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))  # change via env var if needed
+DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 FILES = {
     "CCLE": (DATA_DIR / "CCLE_mutation_22Q2.csv", "22Q2"),
     "MODEL": (DATA_DIR / "Model_DepMap.csv", "25Q2"),
@@ -39,12 +35,7 @@ st.caption(
 DEFAULT_GENES = ["KRAS", "BRAF", "PIK3CA"]
 DEFAULT_TUMORS = ["CRC", "NSCLC", "PDAC"]
 
-# ---------------------------
-# Helpers
-# ---------------------------
-
 def find_col(df: pd.DataFrame, candidates: Iterable[str], *, required: bool = True) -> Optional[str]:
-    """Return the first matching column name (case-sensitive)."""
     for c in candidates:
         if c in df.columns:
             return c
@@ -54,7 +45,6 @@ def find_col(df: pd.DataFrame, candidates: Iterable[str], *, required: bool = Tr
     return None
 
 _norm_cache = {}
-
 def normalize_cell_name(s: str) -> str:
     if s in _norm_cache:
         return _norm_cache[s]
@@ -62,17 +52,12 @@ def normalize_cell_name(s: str) -> str:
     _norm_cache[s] = n
     return n
 
-# ---------------------------
-# Loaders (cached)
-# ---------------------------
 @st.cache_data(show_spinner=True)
 def load_ccle_mutations(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
-    # Minimal required columns
-    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "depMapID"])  # normalize later
-    gene_col = find_col(df, ["Hugo_Symbol", "Gene", "gene_symbol"])  # gene name
+    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "depMapID"])
+    gene_col = find_col(df, ["Hugo_Symbol", "Gene", "gene_symbol"])
     df = df.rename(columns={depmap_col: "DepMap_ID", gene_col: "Hugo_Symbol"})
-    # Only keep columns we need to reduce memory footprint
     keep = ["DepMap_ID", "Hugo_Symbol"]
     keep = [c for c in keep if c in df.columns]
     return df[keep].dropna()
@@ -80,31 +65,12 @@ def load_ccle_mutations(path: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def load_models(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
-    # Try to find core columns
-    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "ModelID"])  # Model_DepMap.csv typically has DepMap_ID
-    # Cell line name column varies widely across exports
+    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "ModelID"])
     cell_candidates = [
-        "stripped_cell_line_name",
-        "Model Name",
-        "Cell Line Name",
-        "cell_line_name",
-        "model_name",
-        "model_name_s",
+        "stripped_cell_line_name","Model Name","Cell Line Name","cell_line_name","model_name","model_name_s"
     ]
     cell_col = find_col(df, cell_candidates, required=False)
-    # TCGA classification or lineage
-    tcga_col = find_col(
-        df,
-        [
-            "TCGA_Classification",
-            "TCGA Classification",
-            "tcga_classification",
-            "primary_disease",
-            "lineage",
-            "OncotreePrimaryDisease",
-        ],
-        required=False,
-    )
+    tcga_col = find_col(df,["TCGA_Classification","TCGA Classification","tcga_classification","primary_disease","lineage","OncotreePrimaryDisease"],required=False)
     rename_map = {depmap_col: "DepMap_ID"}
     if cell_col:
         rename_map[cell_col] = "CellLine"
@@ -118,7 +84,7 @@ def load_models(path: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def load_gdsc1(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
-    # Harmonize column names commonly seen in curated GDSC1 extracts
+    df = df.rename(columns=lambda x: x.strip())  # strip spaces from headers
     rename_map = {}
     if "DepMap ID" in df.columns and "DepMap_ID" not in df.columns:
         rename_map["DepMap ID"] = "DepMap_ID"
@@ -135,43 +101,27 @@ def load_gdsc1(path: Path) -> pd.DataFrame:
         df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
     return df
 
-# ---------------------------
-# Domain logic
-# ---------------------------
-
 def infer_onco_group(tcga_str: str) -> Optional[str]:
-    """Map various TCGA/lineage strings to {CRC, NSCLC, PDAC}."""
     if not isinstance(tcga_str, str):
         return None
     s = tcga_str.upper()
-    # CRC
-    if any(k in s for k in ["COAD", "READ", "COADREAD", "COLORECT", "COLON", "RECTUM"]):
+    if any(k in s for k in ["COAD","READ","COADREAD","COLORECT","COLON","RECTUM"]):
         return "CRC"
-    # NSCLC (approximate: treat LUNG as NSCLC unless explicitly SCLC)
     if "LUNG" in s and "SMALL" not in s:
         return "NSCLC"
-    # PDAC
-    if any(k in s for k in ["PAAD", "PANCREAS", "PANCREATIC"]):
+    if any(k in s for k in ["PAAD","PANCREAS","PANCREATIC"]):
         return "PDAC"
     return None
 
 @st.cache_data(show_spinner=True)
 def build_gdsc_joined(gdsc: pd.DataFrame, models: pd.DataFrame) -> pd.DataFrame:
     df = gdsc.copy()
-    # If DepMap_ID missing in GDSC, map via normalized cell line name
     if "DepMap_ID" not in df.columns and "__norm_cell" in df.columns and "__norm_cell" in models.columns:
-        df = df.merge(models[["DepMap_ID", "__norm_cell"]], on="__norm_cell", how="left")
-    # Try to enrich TCGA Classification if missing
+        df = df.merge(models[["DepMap_ID","__norm_cell"]], on="__norm_cell", how="left")
     if "TCGA_Classification" not in df.columns and "__norm_cell" in df.columns and "__norm_cell" in models.columns:
-        df = df.merge(
-            models[["__norm_cell", "TCGA_Classification"]],
-            on="__norm_cell",
-            how="left",
-            suffixes=("", "_m"),
-        )
+        df = df.merge(models[["__norm_cell","TCGA_Classification"]], on="__norm_cell", how="left", suffixes=("","_m"))
         if "TCGA_Classification" not in df.columns and "TCGA_Classification_m" in df.columns:
-            df = df.rename(columns={"TCGA_Classification_m": "TCGA_Classification"})
-    # Assign coarse tumor group
+            df = df.rename(columns={"TCGA_Classification_m":"TCGA_Classification"})
     if "TCGA_Classification" in df.columns:
         df["TumorGroup"] = df["TCGA_Classification"].map(infer_onco_group)
     else:
@@ -183,9 +133,6 @@ def mutated_depmap_ids(ccle: pd.DataFrame, gene: str) -> Set[str]:
     sub = ccle[ccle["Hugo_Symbol"].str.upper() == gene.upper()]
     return set(sub["DepMap_ID"].dropna().astype(str).unique())
 
-# ---------------------------
-# UI — sidebar controls
-# ---------------------------
 with st.sidebar:
     st.header("Filters")
     gene = st.selectbox("Gene", DEFAULT_GENES, index=0)
@@ -193,9 +140,6 @@ with st.sidebar:
     drug_query = st.text_input("Drug name contains (optional)", value="")
     top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=50, step=10)
 
-# ---------------------------
-# Data pipeline
-# ---------------------------
 try:
     ccle = load_ccle_mutations(FILES["CCLE"][0])
     models = load_models(FILES["MODEL"][0])
@@ -205,56 +149,41 @@ except Exception as e:
     st.stop()
 
 joined = build_gdsc_joined(gdsc, models)
-
-# Apply tumor filters
 if tumors:
     joined = joined[joined["TumorGroup"].isin(tumors)]
-
-# Apply drug name filter (case-insensitive contains)
 if drug_query:
     if "Drug_Name" in joined.columns:
         joined = joined[joined["Drug_Name"].str.contains(drug_query, case=False, na=False)]
     else:
         st.info("'Drug_Name' column not found in GDSC1; skipping drug filter.")
 
-# Identify mutated vs WT by DepMap_ID
 mut_ids = mutated_depmap_ids(ccle, gene)
 if "DepMap_ID" in joined.columns:
     joined["Mut"] = joined["DepMap_ID"].astype(str).isin(mut_ids)
 else:
     joined["Mut"] = False
 
-# Drop rows without IC50
 ic_col = "IC50_uM" if "IC50_uM" in joined.columns else None
 if ic_col is None:
     st.error("IC50 column not found (expected 'IC50 (uM)' → 'IC50_uM'). Please check GDSC1 file.")
     st.stop()
 
 plot_df = joined.dropna(subset=[ic_col]).copy()
-
-# Sort & trim
-plot_df = plot_df.sort_values(by=["Mut", ic_col], ascending=[False, True])  # mutants first, then by IC50 asc
+plot_df = plot_df.sort_values(by=["Mut", ic_col], ascending=[False, True])
 plot_df = plot_df.head(int(top_n))
 
-# Display data table
 st.subheader("Filtered table")
-show_cols = [c for c in ["Drug_Name", "CellLine", "DepMap_ID", "TCGA_Classification", "TumorGroup", ic_col, "Mut"] if c in plot_df.columns]
+show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in plot_df.columns]
 st.dataframe(plot_df[show_cols], use_container_width=True, hide_index=True)
 
-# ---------------------------
-# Plot
-# ---------------------------
 st.subheader("IC50 distribution (lower is more sensitive)")
 if plot_df.empty:
     st.warning("No rows to plot. Try broadening filters or check dataset mappings.")
 else:
     fig, ax = plt.subplots(figsize=(12, 5))
-    # X labels = CellLine (fallback DepMap_ID), color by Mut
     x = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
     y = plot_df[ic_col]
-    colors = plot_df["Mut"].map({True: 1, False: 0})  # matplotlib default color cycle indices
-    ax.bar(x.astype(str), y, label=None)
-    # Re-color mutated bars by drawing overlay (simple legend workaround without specifying explicit colors)
+    ax.bar(x.astype(str), y)
     if plot_df["Mut"].any():
         ax.bar(x[plot_df["Mut"]].astype(str), y[plot_df["Mut"]], label="Mut")
     ax.set_ylabel("IC50 (µM)")
@@ -264,11 +193,4 @@ else:
     ax.tick_params(axis='x', labelrotation=90)
     st.pyplot(fig, clear_figure=True)
 
-# ---------------------------
-# Footnotes / diagnostics
-# ---------------------------
-st.caption(
-    "Notes: Mut=any variant recorded in CCLE 22Q2 for the selected gene; TumorGroup is inferred from TCGA/lineage fields. "
-    "If DepMap_ID is missing in GDSC1, a normalized cell-line name join is used as fallback."
-)
-
+st.caption("Notes: Mut=any variant recorded in CCLE 22Q2 for the selected gene; TumorGroup is inferred. If DepMap_ID missing in GDSC1, normalized cell-line name join is used.")
