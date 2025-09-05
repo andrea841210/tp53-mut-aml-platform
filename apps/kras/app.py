@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app v1.4 — Reorder sections, hide Debug by default
+# Streamlit app v1.5 — Chart view cap (Top 50) for readability; tables keep Top N
 
 from __future__ import annotations
 from pathlib import Path
@@ -257,13 +257,16 @@ except Exception:
     pass
 
 st.subheader("IC50 distribution (lower is more sensitive)")
-if plot_df.empty:
+# Limit chart to a smaller, readable subset; table below still uses Top N
+PLOT_CAP = 50
+chart_df = plot_df.head(PLOT_CAP)
+if chart_df.empty:
     st.warning("No rows to plot. Try broadening filters or check dataset mappings.")
 else:
     fig, ax = plt.subplots(figsize=(12, 5))
-    x_labels = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
-    y = plot_df["IC50_uM"].astype(float)
-    colors = ["red" if bool(m) else "blue" for m in plot_df.get("Mut", pd.Series(False, index=plot_df.index))]
+    x_labels = chart_df.get("CellLine", chart_df.get("DepMap_ID", pd.Series(range(len(chart_df)))))
+    y = chart_df["IC50_uM"].astype(float)
+    colors = ["red" if bool(m) else "blue" for m in chart_df.get("Mut", pd.Series(False, index=chart_df.index))]
     ax.bar(x_labels.astype(str), y, color=colors)
     from matplotlib.patches import Patch
     ax.legend(handles=[Patch(color="red", label="Mutant"), Patch(color="blue", label="WT")])
@@ -271,9 +274,11 @@ else:
     ax.set_xlabel("Cell line")
     title_drug = drug_query if drug_query else "(all drugs)"
     title_tcga = ", ".join(tumors) if tumors else "All TCGA"
-    ax.set_title(f"{title_drug} — {title_tcga} — Gene: {gene}")
+    shown = min(PLOT_CAP, len(plot_df))
+    ax.set_title(f"{title_drug} — {title_tcga} — Gene: {gene} (showing top {shown})")
     ax.tick_params(axis='x', labelrotation=90)
     st.pyplot(fig, clear_figure=True)
+    st.caption(f"Chart capped at top {PLOT_CAP} by lowest IC50 for readability; table below shows Top N = {int(top_n)}.")
 
 st.subheader("Filtered table (Median-collapsed)")
 show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","IC50_uM","Mut"] if c in plot_df.columns]
@@ -305,4 +310,3 @@ with st.expander("Debug: TCGA dropdown sources", expanded=False):
             st.write(pd.Series(tcga_classes).head(20))
     except Exception:
         pass
-
