@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.6 — Sort by global IC50 asc (to match Google Sheet) + show all rows by default
+# Streamlit app skeleton v0.8 — Collapse duplicates with fixed Median (no user option) + duplicate diagnostics
 
 from __future__ import annotations
 import os
@@ -188,6 +188,7 @@ with st.sidebar:
     drug_query = st.text_input("Drug name contains (optional)", value="")
     top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=200, step=10)
     run_button = st.button("Run")
+    st.caption("Duplicates per (Drug, Cell line) are collapsed by **median IC50** for stability.")
 
 if not run_button:
     st.stop()
@@ -221,6 +222,34 @@ if ic_col is None:
     st.stop()
 
 plot_df = joined.dropna(subset=[ic_col]).copy()
+
+# --- Collapse duplicates per (Drug, DepMap_ID or CellLine) using MEDIAN ---
+# Prefer grouping by DepMap_ID when available; else fall back to CellLine
+if "DepMap_ID" in plot_df.columns:
+    grp_keys = ["Drug_Name", "DepMap_ID"] if "Drug_Name" in plot_df.columns else ["DepMap_ID"]
+else:
+    grp_keys = ["Drug_Name", "CellLine"] if "Drug_Name" in plot_df.columns else ["CellLine"]
+
+dup_before = len(plot_df)
+
+def _agg_block(g: pd.DataFrame) -> pd.Series:
+    ic = g[ic_col].astype(float).median()
+    out = {
+        ic_col: ic,
+        "Mut": bool(g.get("Mut", pd.Series([False])).any()),
+        "CellLine": g.get("CellLine", pd.Series([None])).iloc[0],
+        "TCGA_Classification": g.get("TCGA_Classification", pd.Series([None])).iloc[0],
+        "TumorGroup": g.get("TumorGroup", pd.Series([None])).iloc[0],
+        "DepMap_ID": g.get("DepMap_ID", pd.Series([None])).iloc[0],
+        "Drug_Name": g.get("Drug_Name", pd.Series([None])).iloc[0],
+        "_dup_count": len(g),
+    }
+    return pd.Series(out)
+
+plot_df = plot_df.groupby(grp_keys, as_index=False).apply(_agg_block).reset_index(drop=True)
+
+dup_after = len(plot_df)
+collapsed = dup_before - dup_after
 # Global sort by IC50 ascending (no Mut-first grouping) to mirror Google Sheet behavior
 plot_df = plot_df.sort_values(by=[ic_col], ascending=True)
 plot_df = plot_df.head(int(top_n))
@@ -228,10 +257,10 @@ plot_df = plot_df.head(int(top_n))
 # Diagnostics summary
 st.subheader("Diagnostics")
 try:
-    total = len(joined)
-    depmap_matched = joined["DepMap_ID"].notna().sum() if "DepMap_ID" in joined.columns else 0
-    mut_count = int(joined.get("Mut", pd.Series(dtype=bool)).sum()) if "Mut" in joined.columns else 0
-    st.markdown(f"**Rows:** {total} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count}")
+    total = int(len(plot_df))
+    depmap_matched = int(plot_df["DepMap_ID"].notna().sum()) if "DepMap_ID" in plot_df.columns else 0
+    mut_count = int(plot_df.get("Mut", pd.Series(dtype=bool)).sum()) if "Mut" in plot_df.columns else 0
+    st.markdown(f"**Rows:** {total} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count} | **Collapsed duplicates:** {collapsed}")
 except Exception:
     pass
 
