@@ -205,7 +205,8 @@ if tumors:
     if "TCGA_Classification" in joined.columns:
         joined = joined[joined["TCGA_Classification"].astype(str).isin(tumors)]
     else:
-        st.warning("TCGA_Classification not found in data; skipping TCGA filter for this dataset.")joined["TCGA_Classification"].astype(str).isin(tumors)]
+        st.warning("TCGA_Classification not found in data; skipping TCGA filter for this dataset.")
+
 if drug_query and "Drug_Name" in joined.columns:
     joined = joined[joined["Drug_Name"].str.contains(drug_query, case=False, na=False)]
 
@@ -304,3 +305,4 @@ with st.expander("Debug: TCGA dropdown sources", expanded=False):
             st.write(pd.Series(tcga_classes).head(20))
     except Exception:
         pass
+
