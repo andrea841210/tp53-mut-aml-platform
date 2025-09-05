@@ -155,8 +155,23 @@ def build_join(gdsc: pd.DataFrame, models: pd.DataFrame) -> pd.DataFrame:
     df = gdsc.copy()
     if "CellLine" in df.columns:
         df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
-    if "__norm_cell" in df.columns and "__norm_cell" in models.columns:
-        df = df.merge(models[["DepMap_ID","__norm_cell","TCGA_Classification"]], on="__norm_cell", how="left")
+    # Use explicit suffixes to avoid losing TCGA column
+    suffixes = ("_gdsc", "_model")
+    cols_to_merge = ["DepMap_ID", "__norm_cell"]
+    if "TCGA_Classification" in models.columns:
+        cols_to_merge.append("TCGA_Classification")
+    df = df.merge(models[cols_to_merge], on="__norm_cell", how="left", suffixes=suffixes)
+    # Coalesce TCGA: prefer GDSC, fallback to Model/Oncotree mapping
+    tcga_g = "TCGA_Classification_gdsc"
+    tcga_m = "TCGA_Classification_model"
+    if tcga_g in df.columns or tcga_m in df.columns:
+        df["TCGA_Classification"] = df.get(tcga_g, pd.Series(index=df.index)).astype("string").fillna(
+            df.get(tcga_m, pd.Series(index=df.index))
+        )
+        # clean up suffix columns if present
+        for c in [tcga_g, tcga_m]:
+            if c in df.columns:
+                df = df.drop(columns=[c])
     return df
 
 @st.cache_data(show_spinner=True)
