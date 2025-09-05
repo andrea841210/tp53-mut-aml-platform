@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.4 — Mut/WT join strengthened + visual markers + diagnostics + Run button
+# Streamlit app skeleton v0.5 — Mut/WT coloring (red=Mut, blue=WT) + cleaned plot
 
 from __future__ import annotations
 import os
@@ -243,15 +243,15 @@ if plot_df.empty:
     st.warning("No rows to plot. Try broadening filters or check dataset mappings.")
 else:
     fig, ax = plt.subplots(figsize=(12, 5))
-    x = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
-    y = plot_df[ic_col]
-    bars = ax.bar(x.astype(str), y)
-    # Visual markers for mutants without choosing explicit colors: add '*' label above bars
-    if "Mut" in plot_df.columns and plot_df["Mut"].any():
-        for i, (is_mut, val, lbl) in enumerate(zip(plot_df["Mut"], y, x.astype(str))):
-            if bool(is_mut):
-                ax.text(i, float(val), "*", ha="center", va="bottom")
-        ax.legend(["* = Mutant"], loc="best")
+    x_labels = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
+    y = plot_df[ic_col].astype(float)
+    mut_series = plot_df.get("Mut", pd.Series(False, index=plot_df.index))
+    colors = ["red" if bool(m) else "blue" for m in mut_series]
+    ax.bar(x_labels.astype(str), y, color=colors)
+    # Legend
+    from matplotlib.patches import Patch
+    legend_handles = [Patch(color="red", label="Mutant"), Patch(color="blue", label="WT")]
+    ax.legend(handles=legend_handles, loc="best")
     ax.set_ylabel("IC50 (µM)")
     ax.set_xlabel("Cell line")
     title_drug = drug_query if drug_query else "(all drugs)"
