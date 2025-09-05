@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.9 — Median collapse (fixed) + duplicate diagnostics + optional raw replicates view
+# Streamlit app skeleton v0.10 — Broaden NSCLC mapping + Tumor mapping diagnostics
 
 from __future__ import annotations
 import os
@@ -140,6 +140,26 @@ def infer_onco_group(tcga_str: str) -> Optional[str]:
     # CRC (COAD + READ; sometimes COADREAD)
     if any(k in s for k in ["COAD", "READ", "COADREAD", "COLORECT", "COLON", "RECTUM"]):
         return "CRC"
+    # NSCLC (allow explicit NSCLC or generic NON-SMALL/LUNG excluding SCLC)
+    if "NSCLC" in s or "NON-SMALL" in s or ("LUNG" in s and "SMALL" not in s and "SCLC" not in s):
+        return "NSCLC"
+    # PDAC (PAAD)
+    if any(k in s for k in ["PAAD", "PANCREAS", "PANCREATIC"]):
+        return "PDAC"
+    # Breast (BRCA)
+    if any(k in s for k in ["BRCA", "BREAST"]):
+        return "Breast"
+    # Melanoma (SKCM)
+    if any(k in s for k in ["SKCM", "MELANOMA"]):
+        return "Melanoma"
+    # Glioblastoma (GBM)
+    if any(k in s for k in ["GBM", "GLIOBLASTOMA"]):
+        return "Glioblastoma"
+    return None
+    s = tcga_str.upper()
+    # CRC (COAD + READ; sometimes COADREAD)
+    if any(k in s for k in ["COAD", "READ", "COADREAD", "COLORECT", "COLON", "RECTUM"]):
+        return "CRC"
     # NSCLC (LUAD/LUSC or generic LUNG excluding SCLC)
     if any(k in s for k in ["LUAD", "LUSC"]) or ("LUNG" in s and "SMALL" not in s and "SCLC" not in s):
         return "NSCLC"
@@ -222,6 +242,22 @@ except Exception as e:
     st.stop()
 
 joined = build_gdsc_joined(gdsc, models)
+
+# Tumor mapping diagnostics BEFORE filters
+with st.expander("Tumor mapping summary (before filters)", expanded=False):
+    try:
+        tmp = build_gdsc_joined(gdsc, models)  # fresh build to avoid mutation
+        col1, col2 = st.columns(2)
+        with col1:
+            if "TCGA_Classification" in tmp.columns:
+                st.write("TCGA_Classification top values:")
+                st.dataframe(tmp["TCGA_Classification"].value_counts().head(20))
+        with col2:
+            if "TumorGroup" in tmp.columns:
+                st.write("Mapped TumorGroup counts:")
+                st.dataframe(tmp["TumorGroup"].value_counts())
+    except Exception as _:
+        pass
 if tumors:
     joined = joined[joined["TumorGroup"].isin(tumors)]
 if drug_query:
