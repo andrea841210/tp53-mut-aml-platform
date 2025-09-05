@@ -202,7 +202,10 @@ ccle = load_ccle(FILES["CCLE"])
 joined = build_join(gdsc, models)
 
 if tumors:
-    joined = joined[joined["TCGA_Classification"].astype(str).isin(tumors)]
+    if "TCGA_Classification" in joined.columns:
+        joined = joined[joined["TCGA_Classification"].astype(str).isin(tumors)]
+    else:
+        st.warning("TCGA_Classification not found in data; skipping TCGA filter for this dataset.")joined["TCGA_Classification"].astype(str).isin(tumors)]
 if drug_query and "Drug_Name" in joined.columns:
     joined = joined[joined["Drug_Name"].str.contains(drug_query, case=False, na=False)]
 
