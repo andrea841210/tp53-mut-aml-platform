@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.5 — Mut/WT coloring (red=Mut, blue=WT) + cleaned plot
+# Streamlit app skeleton v0.6 — Sort by global IC50 asc (to match Google Sheet) + show all rows by default
 
 from __future__ import annotations
 import os
@@ -186,7 +186,7 @@ with st.sidebar:
     gene = st.selectbox("Gene", DEFAULT_GENES, index=0)
     tumors = st.multiselect("Cancer types", DEFAULT_TUMORS, default=[DEFAULT_TUMORS[0]])
     drug_query = st.text_input("Drug name contains (optional)", value="")
-    top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=50, step=10)
+    top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=200, step=10)
     run_button = st.button("Run")
 
 if not run_button:
@@ -221,7 +221,8 @@ if ic_col is None:
     st.stop()
 
 plot_df = joined.dropna(subset=[ic_col]).copy()
-plot_df = plot_df.sort_values(by=["Mut", ic_col], ascending=[False, True])
+# Global sort by IC50 ascending (no Mut-first grouping) to mirror Google Sheet behavior
+plot_df = plot_df.sort_values(by=[ic_col], ascending=True)
 plot_df = plot_df.head(int(top_n))
 
 # Diagnostics summary
