@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app v1.3 — Raise Top-N cap, show available row count, clarify SCLC exclusion
+# Streamlit app v1.4 — Reorder sections, hide Debug by default
 
 from __future__ import annotations
 from pathlib import Path
@@ -204,7 +204,7 @@ with st.sidebar:
     run_button = st.button("Run")
     st.caption("Duplicates per (Drug, Cell line) are collapsed by **median IC50** for stability. **Note:** SCLC (small cell lung cancer) is not included when you select LUAD/LUSC/NSCLC contexts.")
 
-# --- Debug panel for dropdown sources ---
+# --- Debug panel for dropdown sources (kept for developers, folded at bottom) ---
 with st.expander("Debug: TCGA dropdown sources", expanded=False):
     try:
         src_cols_models = [c for c in ["TCGA_Classification", "TCGA Classification", "primary_disease", "lineage", "OncotreePrimaryDisease"] if c in models_for_list.columns]
