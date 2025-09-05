@@ -33,7 +33,7 @@ st.caption(
 )
 
 DEFAULT_GENES = ["KRAS", "BRAF", "PIK3CA", "TP53", "STK11", "KEAP1", "SMAD4", "CDKN2A"]
-DEFAULT_TUMORS = ["CRC", "NSCLC", "PDAC", "BRCA", "SKCM", "GBM"]
+DEFAULT_TUMORS = ["CRC", "NSCLC", "PDAC", "Breast", "Melanoma", "Glioblastoma"]
 
 def find_col(df: pd.DataFrame, candidates: Iterable[str], *, required: bool = True) -> Optional[str]:
     for c in candidates:
@@ -136,6 +136,26 @@ def load_gdsc1(path: Path) -> pd.DataFrame:
 def infer_onco_group(tcga_str: str) -> Optional[str]:
     if not isinstance(tcga_str, str):
         return None
+    s = tcga_str.upper()
+    # CRC (COAD + READ; sometimes COADREAD)
+    if any(k in s for k in ["COAD", "READ", "COADREAD", "COLORECT", "COLON", "RECTUM"]):
+        return "CRC"
+    # NSCLC (LUAD/LUSC or generic LUNG excluding SCLC)
+    if any(k in s for k in ["LUAD", "LUSC"]) or ("LUNG" in s and "SMALL" not in s and "SCLC" not in s):
+        return "NSCLC"
+    # PDAC (PAAD)
+    if any(k in s for k in ["PAAD", "PANCREAS", "PANCREATIC"]):
+        return "PDAC"
+    # Breast (BRCA)
+    if any(k in s for k in ["BRCA", "BREAST"]):
+        return "Breast"
+    # Melanoma (SKCM)
+    if any(k in s for k in ["SKCM", "MELANOMA"]):
+        return "Melanoma"
+    # Glioblastoma (GBM)
+    if any(k in s for k in ["GBM", "GLIOBLASTOMA"]):
+        return "Glioblastoma"
+    return None
     s = tcga_str.upper()
     if any(k in s for k in ["COAD","READ","COADREAD","COLORECT","COLON","RECTUM"]):
         return "CRC"
