@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app v1.2 — Map OncotreePrimaryDisease → TCGA_Classification (LUAD/LUSC/COREAD/...) for robust TCGA filtering
+# Streamlit app v1.3 — Raise Top-N cap, show available row count, clarify SCLC exclusion
 
 from __future__ import annotations
 from pathlib import Path
@@ -200,9 +200,9 @@ with st.sidebar:
     tcga_classes = sorted(tcga_opts)
     tumors = st.multiselect("TCGA Classification (direct)", tcga_classes, default=[])
     drug_query = st.text_input("Drug name contains (optional)", value="")
-    top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=200, step=10)
+    top_n = st.number_input("Top N bars to show", min_value=10, max_value=1000, value=200, step=10)
     run_button = st.button("Run")
-    st.caption("Duplicates per (Drug, Cell line) are collapsed by **median IC50** for stability.")
+    st.caption("Duplicates per (Drug, Cell line) are collapsed by **median IC50** for stability. **Note:** SCLC (small cell lung cancer) is not included when you select LUAD/LUSC/NSCLC contexts.")
 
 # --- Debug panel for dropdown sources ---
 with st.expander("Debug: TCGA dropdown sources", expanded=False):
@@ -286,8 +286,10 @@ plot_df = work.groupby(grp_keys, as_index=False).apply(_agg).reset_index(drop=Tr
 after = len(plot_df)
 collapsed = max(0, before - after)
 
-# Sort & trim
-plot_df = plot_df.sort_values(by=["IC50_uM"], ascending=True).head(int(top_n))
+# Sort & compute counts
+sorted_df = plot_df.sort_values(by=["IC50_uM"], ascending=True)
+available_rows = len(sorted_df)
+plot_df = sorted_df.head(int(top_n))
 
 # Diagnostics
 st.subheader("Diagnostics")
@@ -295,7 +297,7 @@ try:
     total = int(len(plot_df))
     depmap_matched = int(plot_df["DepMap_ID"].notna().sum()) if "DepMap_ID" in plot_df.columns else 0
     mut_count = int(plot_df.get("Mut", pd.Series(dtype=bool)).sum()) if "Mut" in plot_df.columns else 0
-    st.markdown(f"**Rows:** {total} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count} | **Collapsed duplicates:** {collapsed}")
+    st.markdown(f"**Rows (after Top N):** {total} | **Available (before Top N):** {available_rows} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count} | **Collapsed duplicates:** {collapsed}")
 except Exception:
     pass
 
