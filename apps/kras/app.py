@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app v1.1 — Fix TCGA dropdown (union from models+GDSC), keep caption visible, add debug panel
+# Streamlit app v1.2 — Map OncotreePrimaryDisease → TCGA_Classification (LUAD/LUSC/COREAD/...) for robust TCGA filtering
 
 from __future__ import annotations
 from pathlib import Path
@@ -65,24 +65,63 @@ def load_models(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
     df = df.rename(columns=lambda x: x.strip())
     depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "ModelID", "modelid"])  # ACH-xxxxx
-    # Cell-line name candidates
+    # Keep potential name/ontology columns
     cell_candidates = [
         "CellLineName", "Cell Line Name", "stripped_cell_line_name", "StrippedCellLineName",
         "CCLEName", "Model Name"
     ]
     cell_col = find_col(df, cell_candidates, required=False)
     tcga_col = find_col(df, ["TCGA_Classification", "TCGA Classification", "tcga_classification"], required=False)
+    # Prepare base rename
     rename_map = {depmap_col: "DepMap_ID"}
     if cell_col:
         rename_map[cell_col] = "CellLine"
     if tcga_col:
         rename_map[tcga_col] = "TCGA_Classification"
     df = df.rename(columns=rename_map)
+    # Build normalization keys
     if "CellLine" in df.columns:
         df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
-    # Also build extra normalized keys if available
     for alt in [c for c in ["CCLEName", "StrippedCellLineName", "stripped_cell_line_name"] if c in df.columns]:
         df[f"__norm_{alt}"] = df[alt].map(normalize_cell_name)
+    # --- NEW: Oncotree → TCGA mapping fallback ---
+    if "TCGA_Classification" not in df.columns and "OncotreePrimaryDisease" in df.columns:
+        def oncotree_to_tcga(x: str) -> Optional[str]:
+            if not isinstance(x, str):
+                return None
+            s = x.strip().upper()
+            mapping = {
+                "LUNG ADENOCARCINOMA": "LUAD",
+                "LUNG SQUAMOUS CELL CARCINOMA": "LUSC",
+                "NON-SMALL CELL LUNG CANCER": "NSCLC",
+                "SMALL CELL LUNG CANCER": "SCLC",
+                "COLORECTAL ADENOCARCINOMA": "COREAD",
+                "BREAST CARCINOMA": "BRCA",
+                "SKIN CUTANEOUS MELANOMA": "SKCM",
+                "GLIOBLASTOMA": "GBM",
+                "PANCREATIC ADENOCARCINOMA": "PAAD",
+                "ESOPHAGEAL CARCINOMA": "ESCA",
+                "HEAD AND NECK SQUAMOUS CELL CARCINOMA": "HNSC",
+                "OVARIAN SEROUS CYSTADENOCARCINOMA": "OV",
+            }
+            if s in mapping:
+                return mapping[s]
+            if ("ADENOCARCINOMA" in s) and ("COLON" in s or "RECT" in s):
+                return "COREAD"
+            if "MELANOMA" in s:
+                return "SKCM"
+            if "BREAST" in s:
+                return "BRCA"
+            if "GLIOBLAST" in s:
+                return "GBM"
+            if "PANCREA" in s:
+                return "PAAD"
+            if "LUNG" in s and ("SMALL" not in s and "SCLC" not in s):
+                return "NSCLC"
+            if "LUNG" in s and ("SMALL" in s or "SCLC" in s):
+                return "SCLC"
+            return None
+        df["TCGA_Classification"] = df["OncotreePrimaryDisease"].map(oncotree_to_tcga)
     return df
 
 @st.cache_data(show_spinner=True)
