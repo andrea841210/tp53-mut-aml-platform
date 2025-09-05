@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.3 — added Run button in sidebar
+# Streamlit app skeleton v0.4 — Mut/WT join strengthened + visual markers + diagnostics + Run button
 
 from __future__ import annotations
 import os
@@ -65,20 +65,52 @@ def load_ccle_mutations(path: Path) -> pd.DataFrame:
 @st.cache_data(show_spinner=True)
 def load_models(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path, low_memory=False)
-    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "ModelID"])
+    df = df.rename(columns=lambda x: x.strip())
+    # Prefer explicit DepMap_ID if present; else fall back to ModelID (ACH-xxxxx)
+    depmap_col = None
+    for c in ["DepMap_ID", "depmap_id", "ModelID", "modelid"]:
+        if c in df.columns:
+            depmap_col = c
+            break
+    if depmap_col is None:
+        st.error("Model_DepMap.csv missing DepMap_ID/ModelID column.")
+        st.stop()
+    # Cell line naming candidates
     cell_candidates = [
-        "stripped_cell_line_name","Model Name","Cell Line Name","cell_line_name","model_name","model_name_s"
+        "CellLineName","Cell Line Name","stripped_cell_line_name","StrippedCellLineName",
+        "Model Name","cell_line_name","model_name","model_name_s","CCLEName"
     ]
-    cell_col = find_col(df, cell_candidates, required=False)
-    tcga_col = find_col(df,["TCGA_Classification","TCGA Classification","tcga_classification","primary_disease","lineage","OncotreePrimaryDisease"],required=False)
+    cell_col = None
+    for c in cell_candidates:
+        if c in df.columns:
+            cell_col = c
+            break
+    # TCGA/lineage candidates
+    tcga_candidates = [
+        "TCGA_Classification","TCGA Classification","tcga_classification","primary_disease","lineage","OncotreePrimaryDisease"
+    ]
+    tcga_col = None
+    for c in tcga_candidates:
+        if c in df.columns:
+            tcga_col = c
+            break
     rename_map = {depmap_col: "DepMap_ID"}
     if cell_col:
         rename_map[cell_col] = "CellLine"
     if tcga_col:
         rename_map[tcga_col] = "TCGA_Classification"
     df = df.rename(columns=rename_map)
-    if "CellLine" in df.columns:
-        df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
+    # Build multiple normalization keys to improve match rate
+    src_name_cols = [c for c in ["CellLine","CCLEName","StrippedCellLineName","stripped_cell_line_name"] if c in df.columns]
+    if not src_name_cols:
+        st.warning("Model_DepMap.csv has no cell-line name columns; only DepMap_ID joins will work.")
+    # Primary normalized key from the first available name column
+    if src_name_cols:
+        df["__norm_cell"] = df[src_name_cols[0]].map(normalize_cell_name)
+    # Secondary keys for broader matching
+    for c in src_name_cols[1:]:
+        key = f"__norm_{normalize_cell_name(c)}"
+        df[key] = df[c].map(normalize_cell_name)
     return df
 
 @st.cache_data(show_spinner=True)
@@ -122,16 +154,26 @@ def infer_onco_group(tcga_str: str) -> Optional[str]:
 @st.cache_data(show_spinner=True)
 def build_gdsc_joined(gdsc: pd.DataFrame, models: pd.DataFrame) -> pd.DataFrame:
     df = gdsc.copy()
-    if "DepMap_ID" not in df.columns and "__norm_cell" in df.columns and "__norm_cell" in models.columns:
-        df = df.merge(models[["DepMap_ID","__norm_cell"]], on="__norm_cell", how="left")
+    # Try a cascade of merges to obtain DepMap_ID and TCGA from models
+    name_keys = [c for c in models.columns if c.startswith("__norm_")]
+    keys_to_try = ["__norm_cell"] + name_keys if "__norm_cell" in df.columns else name_keys
+    gained_depmap = 0
+    for k in keys_to_try:
+        if k in df.columns and k in models.columns:
+            before = df["DepMap_ID"].notna().sum() if "DepMap_ID" in df.columns else 0
+            df = df.merge(models[["DepMap_ID", k]], on=k, how="left", suffixes=("","_m2"))
+            # Fill only where missing
+            if "DepMap_ID_m2" in df.columns:
+                df["DepMap_ID"] = df["DepMap_ID"].astype(object)
+                df.loc[df["DepMap_ID"].isna(), "DepMap_ID"] = df.loc[df["DepMap_ID"].isna(), "DepMap_ID_m2"]
+                df = df.drop(columns=["DepMap_ID_m2"])
+            after = df["DepMap_ID"].notna().sum()
+            gained_depmap += max(0, after - before)
     if "TCGA_Classification" not in df.columns and "__norm_cell" in df.columns and "__norm_cell" in models.columns:
         df = df.merge(models[["__norm_cell","TCGA_Classification"]], on="__norm_cell", how="left", suffixes=("","_m"))
         if "TCGA_Classification" not in df.columns and "TCGA_Classification_m" in df.columns:
             df = df.rename(columns={"TCGA_Classification_m":"TCGA_Classification"})
-    if "TCGA_Classification" in df.columns:
-        df["TumorGroup"] = df["TCGA_Classification"].map(infer_onco_group)
-    else:
-        df["TumorGroup"] = None
+    df["TumorGroup"] = df.get("TCGA_Classification").map(infer_onco_group) if "TCGA_Classification" in df.columns else None
     return df
 
 @st.cache_data(show_spinner=True)
@@ -182,9 +224,19 @@ plot_df = joined.dropna(subset=[ic_col]).copy()
 plot_df = plot_df.sort_values(by=["Mut", ic_col], ascending=[False, True])
 plot_df = plot_df.head(int(top_n))
 
+# Diagnostics summary
+st.subheader("Diagnostics")
+try:
+    total = len(joined)
+    depmap_matched = joined["DepMap_ID"].notna().sum() if "DepMap_ID" in joined.columns else 0
+    mut_count = int(joined.get("Mut", pd.Series(dtype=bool)).sum()) if "Mut" in joined.columns else 0
+    st.markdown(f"**Rows:** {total} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count}")
+except Exception:
+    pass
+
 st.subheader("Filtered table")
-show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in plot_df.columns]
-st.dataframe(plot_df[show_cols], use_container_width=True, hide_index=True)
+show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","TumorGroup",ic_col,"Mut"] if c in joined.columns]
+st.dataframe(joined[show_cols], use_container_width=True, hide_index=True)
 
 st.subheader("IC50 distribution (lower is more sensitive)")
 if plot_df.empty:
@@ -193,9 +245,13 @@ else:
     fig, ax = plt.subplots(figsize=(12, 5))
     x = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
     y = plot_df[ic_col]
-    ax.bar(x.astype(str), y)
-    if plot_df["Mut"].any():
-        ax.bar(x[plot_df["Mut"]].astype(str), y[plot_df["Mut"]], label="Mut")
+    bars = ax.bar(x.astype(str), y)
+    # Visual markers for mutants without choosing explicit colors: add '*' label above bars
+    if "Mut" in plot_df.columns and plot_df["Mut"].any():
+        for i, (is_mut, val, lbl) in enumerate(zip(plot_df["Mut"], y, x.astype(str))):
+            if bool(is_mut):
+                ax.text(i, float(val), "*", ha="center", va="bottom")
+        ax.legend(["* = Mutant"], loc="best")
     ax.set_ylabel("IC50 (µM)")
     ax.set_xlabel("Cell line")
     title_drug = drug_query if drug_query else "(all drugs)"
