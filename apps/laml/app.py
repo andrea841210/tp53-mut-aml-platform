@@ -1,316 +1,275 @@
-import streamlit as st
+# Node-1 IC50 Explorer • Solid Tumors (KRAS track)
+# Streamlit app v1.0 — TCGA-class filter in sidebar, robust joins, median collapse, diagnostics
+
+from __future__ import annotations
+from pathlib import Path
+from typing import Iterable, Optional, Set
+import re
+
 import pandas as pd
 import matplotlib.pyplot as plt
-import os
+import streamlit as st
 
-st.set_page_config(page_title="Node-1 Demo • LAML IC50 Explorer (SO-06c)", layout="wide")
-st.title("Node-1 Demo • LAML IC50 Explorer (SO-06c)")
-st.caption("Andrea × GPT Mirror Project — Multi-variant AND subset build • baseline = SO-06b single-gene")
+# ---------------------------
+# Page meta
+# ---------------------------
+st.set_page_config(page_title="Node‑1 IC50 Explorer — KRAS track", layout="wide")
+st.title("Node‑1 IC50 Explorer • Solid Tumors (KRAS track)")
 
-# -------------------------------
+DATA_DIR = Path("data")
+FILES = {
+    "CCLE": DATA_DIR / "CCLE_mutation_22Q2.csv",   # placeholder may be KRAS geneset
+    "MODEL": DATA_DIR / "Model_DepMap.csv",
+    "GDSC1": DATA_DIR / "GDSC1_IC50.csv",
+}
+
+def _fmt_exists(p: Path) -> str:
+    return f"✅ {p.name}" if p.exists() else f"❌ {p.name}"
+
+st.caption(
+    "Datasets → "
+    f"CCLE {_fmt_exists(FILES['CCLE'])} • "
+    f"Model {_fmt_exists(FILES['MODEL'])} • "
+    f"GDSC1 {_fmt_exists(FILES['GDSC1'])} | IC50 aggregation: **median**"
+)
+
+DEFAULT_GENES = ["KRAS", "BRAF", "PIK3CA", "TP53", "STK11", "KEAP1", "SMAD4", "CDKN2A"]
+
+# ---------------------------
 # Helpers
-# -------------------------------
-def normalize_columns(df: pd.DataFrame):
-    mapping = {}
-    new_cols = []
-    for c in df.columns:
-        norm = (
-            str(c)
-            .strip()
-            .replace("\u00A0", " ")
-            .replace(" ", "_")
-            .replace("-", "_")
-            .replace("/", "_")
-            .replace("(", "")
-            .replace(")", "")
-        )
-        norm = "".join(ch for ch in norm if ch.isalnum() or ch == "_").lower()
-        mapping[c] = norm
-        new_cols.append(norm)
-    out = df.copy()
-    out.columns = new_cols
-    return out, mapping
+# ---------------------------
 
-def guess_col(df: pd.DataFrame, candidates):
-    cols = set(df.columns)
+def find_col(df: pd.DataFrame, candidates: Iterable[str], *, required: bool = True) -> Optional[str]:
     for c in candidates:
-        if c in cols:
+        if c in df.columns:
             return c
-    # soft match removing underscores
-    no_us = {c: c.replace("_", "") for c in df.columns}
-    for cand in candidates:
-        k = cand.replace("_", "")
-        for orig, transformed in no_us.items():
-            if transformed == k:
-                return orig
+    if required:
+        st.error(f"Required column not found. Tried: {list(candidates)}")
+        st.stop()
     return None
 
-def summarize_columns(label, df, mapping):
-    with st.expander(f"🔎 {label} — column inspection", expanded=False):
-        st.write("**Original → Normalized** (first 40 shown):")
-        view = pd.DataFrame({"original": list(mapping.keys()), "normalized": list(mapping.values())})
-        st.dataframe(view.head(40), use_container_width=True)
-        st.write("**All normalized columns:**", list(df.columns))
+_norm_cache: dict[str, str] = {}
 
-def build_mutation_status_single(mut_df: pd.DataFrame, gene_name: str):
-    """Return depmap_id + mutwt for a single gene (MUT/WT)."""
-    gene_col = guess_col(mut_df, ["gene", "gene_name", "hugo_symbol", "symbol"]) or "gene"
-    depmap_col = guess_col(mut_df, ["depmap_id", "depmapid", "modelid", "model_id"]) or "depmap_id"
-    status_col = guess_col(mut_df, ["mut_wt", "mutwt", "mutation_status", "status"])
+def normalize_cell_name(s: str) -> str:
+    if s in _norm_cache:
+        return _norm_cache[s]
+    n = re.sub(r"[^A-Za-z0-9]", "", str(s)).upper()
+    _norm_cache[s] = n
+    return n
 
-    missing = []
-    for needed in [gene_col, depmap_col]:
-        if needed not in mut_df.columns:
-            missing.append(needed)
-    if missing:
-        raise ValueError(f"Mutation file is missing required columns: {missing}.")
+# ---------------------------
+# Loaders (cached)
+# ---------------------------
+@st.cache_data(show_spinner=True)
+def load_models(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, low_memory=False)
+    df = df.rename(columns=lambda x: x.strip())
+    depmap_col = find_col(df, ["DepMap_ID", "depmap_id", "ModelID", "modelid"])  # ACH-xxxxx
+    # Cell-line name candidates
+    cell_candidates = [
+        "CellLineName", "Cell Line Name", "stripped_cell_line_name", "StrippedCellLineName",
+        "CCLEName", "Model Name"
+    ]
+    cell_col = find_col(df, cell_candidates, required=False)
+    tcga_col = find_col(df, ["TCGA_Classification", "TCGA Classification", "tcga_classification"], required=False)
+    rename_map = {depmap_col: "DepMap_ID"}
+    if cell_col:
+        rename_map[cell_col] = "CellLine"
+    if tcga_col:
+        rename_map[tcga_col] = "TCGA_Classification"
+    df = df.rename(columns=rename_map)
+    if "CellLine" in df.columns:
+        df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
+    # Also build extra normalized keys if available
+    for alt in [c for c in ["CCLEName", "StrippedCellLineName", "stripped_cell_line_name"] if c in df.columns]:
+        df[f"__norm_{alt}"] = df[alt].map(normalize_cell_name)
+    return df
 
-    # Filter to the requested gene if present, else pass-through
-    if gene_col in mut_df.columns:
-        tmp = mut_df[mut_df[gene_col].astype(str).str.upper() == gene_name.upper()].copy()
+@st.cache_data(show_spinner=True)
+def load_gdsc(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    df = df.rename(columns=lambda x: x.strip())
+    rename_map = {}
+    if "IC50 (uM)" in df.columns:
+        rename_map["IC50 (uM)"] = "IC50_uM"
+    if "Drug Name" in df.columns:
+        rename_map["Drug Name"] = "Drug_Name"
+    if "Cell Line Name" in df.columns:
+        rename_map["Cell Line Name"] = "CellLine"
+    if "TCGA Classification" in df.columns:
+        rename_map["TCGA Classification"] = "TCGA_Classification"
+    df = df.rename(columns=rename_map)
+    if "CellLine" in df.columns:
+        df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
+    return df
+
+@st.cache_data(show_spinner=True)
+def load_ccle(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path, low_memory=False)
+    df = df.rename(columns=lambda x: x.strip())
+    # Expect long format: DepMap_ID + Hugo_Symbol
+    depmap_col = find_col(df, ["DepMap_ID", "depmap_id"], required=False)
+    gene_col = find_col(df, ["Hugo_Symbol", "Gene", "gene_symbol"], required=False)
+    if depmap_col and gene_col:
+        return df.rename(columns={depmap_col: "DepMap_ID", gene_col: "Hugo_Symbol"})[["DepMap_ID", "Hugo_Symbol"]]
     else:
-        tmp = mut_df.copy()
+        # If a wide geneset was provided, try to melt it (boolean columns per gene)
+        return df
 
-    if tmp.empty:
-        # no rows for the gene -> assume everyone WT
-        out = mut_df[[depmap_col]].drop_duplicates().copy()
-        out.rename(columns={depmap_col: "depmap_id"}, inplace=True)
-        out["mutwt"] = "WT"
-        return out
+@st.cache_data(show_spinner=True)
+def build_join(gdsc: pd.DataFrame, models: pd.DataFrame) -> pd.DataFrame:
+    df = gdsc.copy()
+    # Cascade merges to enrich DepMap_ID and TCGA_Classification
+    keys_to_try = [k for k in ["__norm_cell", "__norm_CCLEName", "__norm_StrippedCellLineName", "__norm_stripped_cell_line_name"] if k in models.columns]
+    if "__norm_cell" not in df.columns and "CellLine" in df.columns:
+        df["__norm_cell"] = df["CellLine"].map(normalize_cell_name)
+    for k in keys_to_try:
+        if k in df.columns and k in models.columns:
+            df = df.merge(models[["DepMap_ID", "TCGA_Classification", k]], on=k, how="left", suffixes=("", "_m"))
+            if "DepMap_ID_m" in df.columns:
+                df["DepMap_ID"] = df["DepMap_ID"].fillna(df["DepMap_ID_m"])
+                df = df.drop(columns=["DepMap_ID_m"])
+            if "TCGA_Classification_m" in df.columns and "TCGA_Classification" not in df.columns:
+                df = df.rename(columns={"TCGA_Classification_m": "TCGA_Classification"})
+    return df
 
-    if status_col and status_col in tmp.columns:
-        s = tmp[[depmap_col, status_col]].copy()
-        s.rename(columns={status_col: "mutwt", depmap_col: "depmap_id"}, inplace=True)
-        s["mutwt"] = (
-            s["mutwt"].astype(str).str.strip().str.upper().replace({"MUTANT": "MUT", "WILDTYPE": "WT"})
-        )
-        s.loc[~s["mutwt"].isin(["MUT", "WT"]), "mutwt"] = "MUT"
-        s = s.drop_duplicates("depmap_id")
-        return s
+@st.cache_data(show_spinner=True)
+def mutated_depmap_ids(ccle: pd.DataFrame, gene: str) -> Set[str]:
+    if {"DepMap_ID", "Hugo_Symbol"}.issubset(ccle.columns):
+        sub = ccle[ccle["Hugo_Symbol"].str.upper() == gene.upper()]
+        return set(sub["DepMap_ID"].astype(str).unique())
+    # Wide format fallback: treat non-empty truthy cells as mutation flag
+    if gene in ccle.columns and "DepMap_ID" in ccle.columns:
+        sub = ccle[ccle[gene].astype(str).str.upper().isin(["1", "TRUE", "YES", "Y"])]["DepMap_ID"]
+        return set(sub.astype(str).unique())
+    return set()
+
+# ---------------------------
+# Sidebar (build TCGA list from models)
+# ---------------------------
+with st.sidebar:
+    st.header("Filters")
+    gene = st.selectbox("Gene", DEFAULT_GENES, index=0)
+    models_for_list = load_models(FILES["MODEL"])  # cached
+    if "TCGA_Classification" in models_for_list.columns:
+        tcga_classes = sorted(models_for_list["TCGA_Classification"].dropna().astype(str).unique().tolist())
     else:
-        # presence implies MUT
-        s = tmp[[depmap_col]].drop_duplicates().copy()
-        s.rename(columns={depmap_col: "depmap_id"}, inplace=True)
-        s["mutwt"] = "MUT"
-        return s
+        tcga_classes = []
+    tumors = st.multiselect("TCGA Classification (direct)", tcga_classes, default=[])
+    drug_query = st.text_input("Drug name contains (optional)", value="")
+    top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=200, step=10)
+    run_button = st.button("Run")
+    st.caption("Duplicates per (Drug, Cell line) are collapsed by **median IC50** for stability.")
 
-def build_mutation_status_multi(mut_df: pd.DataFrame, genes: list):
-    """Return depmap_id + per-gene MUT/WT + AND flag across selected genes."""
-    parts = []
-    for g in genes:
-        sg = build_mutation_status_single(mut_df, g)
-        sg = sg.rename(columns={"mutwt": f"status_{g.upper()}"})
-        parts.append(sg)
-    # outer merge to keep full universe
-    out = None
-    for p in parts:
-        out = p if out is None else out.merge(p, on="depmap_id", how="outer")
-    # any missing status -> treat as WT
-    for g in genes:
-        col = f"status_{g.upper()}"
-        if col not in out.columns:
-            out[col] = "WT"
-        else:
-            out[col] = out[col].fillna("WT").astype(str).str.upper()
-    # AND across requested genes
-    out["mut_and"] = (out[[f"status_{g.upper()}" for g in genes]] == "MUT").all(axis=1)
-    return out
-
-# -------------------------------
-# Mode selection
-# -------------------------------
-mode = st.sidebar.radio("Data source", ["Lite (built-in)", "Advanced (upload)"], index=0)
-
-# Sidebar Inputs
-gdsc_file = st.sidebar.file_uploader("GDSC IC50 table (CSV or Excel)", type=["csv", "xlsx", "xls"])
-mut_file = st.sidebar.file_uploader("Mutation table (CSV)", type=["csv"])
-map_file = st.sidebar.file_uploader("DepMap mapper (optional, CSV)", type=["csv"])
-
-# Subset controls
-subset_mode = st.sidebar.selectbox("Subset mode", ["Single gene", "Multi-gene (AND)"])
-
-# Presets for AND combos
-preset = None
-selected_genes = []
-if subset_mode == "Single gene":
-    gene_name = st.sidebar.selectbox("Gene name", ["TP53", "FLT3", "NPM1"], index=0)
-else:
-    preset = st.sidebar.selectbox(
-        "Gene combo (AND)",
-        ["TP53 + FLT3", "TP53 + NPM1", "TP53 + FLT3 + NPM1", "Custom…"],
-        index=0,
+# Always show a compact TCGA reference (right side)
+with st.expander("TCGA code reference (common groups)", expanded=False):
+    st.markdown(
+        "- **LUAD** = Lung adenocarcinoma (NSCLC)  \n"
+        "- **LUSC** = Lung squamous cell carcinoma (NSCLC)  \n"
+        "- **COREAD** = Colorectal adenocarcinoma (CRC)  \n"
+        "- **BRCA** = Breast invasive carcinoma  \n"
+        "- **SKCM** = Skin cutaneous melanoma  \n"
+        "- **GBM** = Glioblastoma multiforme  \n"
+        "- **PAAD** = Pancreatic adenocarcinoma (PDAC)"
     )
-    if preset == "TP53 + FLT3":
-        selected_genes = ["TP53", "FLT3"]
-    elif preset == "TP53 + NPM1":
-        selected_genes = ["TP53", "NPM1"]
-    elif preset == "TP53 + FLT3 + NPM1":
-        selected_genes = ["TP53", "FLT3", "NPM1"]
-    else:
-        selected_genes = st.sidebar.multiselect("Pick genes (AND)", ["TP53", "FLT3", "NPM1"], default=["TP53", "FLT3"]) or ["TP53", "FLT3"]
 
-# Shared inputs
-col_a, col_b = st.sidebar.columns(2)
-with col_a:
-    drug_name = st.text_input("Drug name", value="Rapamycin")
-with col_b:
-    only_and = st.checkbox("Only show AND-mutant lines", value=False)
+# ---------------------------
+# Main run
+# ---------------------------
+if not run_button:
+    st.stop()
 
-# --- helpers for reading file or path ---
-def read_any_table(obj):
-    if isinstance(obj, str):
-        name = obj.lower()
-        if name.endswith((".xlsx", ".xls")):
-            return pd.read_excel(obj, engine="openpyxl")
-        else:
-            return pd.read_csv(obj)
-    else:
-        name = obj.name.lower()
-        if name.endswith((".xlsx", ".xls")):
-            return pd.read_excel(obj, engine="openpyxl")
-        else:
-            return pd.read_csv(obj)
+# Load datasets (cached)
+gdsc = load_gdsc(FILES["GDSC1"])  # expects Drug_Name, CellLine, IC50_uM
+models = models_for_list
+ccle = load_ccle(FILES["CCLE"])   # expects DepMap_ID, Hugo_Symbol (long) or wide
 
-DATA_DIR = "data"
-DEFAULT_GDSC_PATH = os.path.join(DATA_DIR, "GDSC1_LAML.xlsx")
-DEFAULT_MUT_PATH  = os.path.join(DATA_DIR, "CCLE_TP53xNPMxFLT3.csv")
-DEFAULT_MAP_PATH  = os.path.join(DATA_DIR, "Model_DepMap.csv")
+joined = build_join(gdsc, models)
 
-if mode == "Lite (built-in)":
-    gdsc_source = DEFAULT_GDSC_PATH
-    mut_source  = DEFAULT_MUT_PATH
-    map_source  = DEFAULT_MAP_PATH
-    cancer_type = "LAML"
-    st.caption(
-        "Lite mode: built-in LAML data. Sources — GDSC1 (downloaded 2025-09), "
-        "CCLE mutation (DepMap 22Q2), Model mapper (DepMap 25Q2)."
-    )
+# Apply filters
+if tumors:
+    if "TCGA_Classification" in joined.columns:
+        joined = joined[joined["TCGA_Classification"].astype(str).isin(tumors)]
+if drug_query:
+    if "Drug_Name" in joined.columns:
+        joined = joined[joined["Drug_Name"].str.contains(drug_query, case=False, na=False)]
+
+# Mut/WT assignment via CCLE mutations
+mut_ids = mutated_depmap_ids(ccle, gene)
+if "DepMap_ID" in joined.columns:
+    joined["Mut"] = joined["DepMap_ID"].astype(str).isin(mut_ids)
 else:
-    gdsc_source = gdsc_file
-    mut_source  = mut_file
-    map_source  = map_file
-    cancer_type = st.text_input("Cancer type (TCGA class)", value="LAML")
+    joined["Mut"] = False
 
-# -------------------------------
-# Main workflow
-# -------------------------------
-run = st.sidebar.button("Run")
-if run:
-    try:
-        if gdsc_source is None or mut_source is None:
-            st.warning("Please provide GDSC and Mutation data.")
-            st.stop()
+# Require IC50
+if "IC50_uM" not in joined.columns:
+    st.error("IC50 column not found. Ensure GDSC1 has 'IC50 (uM)' header.")
+    st.stop()
 
-        # Load & normalize
-        df_gdsc_raw = read_any_table(gdsc_source)
-        df_mut_raw  = read_any_table(mut_source)
-        df_gdsc, map_gdsc = normalize_columns(df_gdsc_raw)
-        df_mut,  map_mut  = normalize_columns(df_mut_raw)
-
-        if map_source is not None:
-            df_map_raw = read_any_table(map_source)
-            df_map, map_map = normalize_columns(df_map_raw)
-        else:
-            df_map, map_map = None, None
-
-        summarize_columns("GDSC table", df_gdsc, map_gdsc)
-        summarize_columns("Mutation table", df_mut, map_mut)
-        if df_map is not None:
-            summarize_columns("Mapper table", df_map, map_map)
-
-        # Identify key columns
-        col_drug = guess_col(df_gdsc, ["drug_name", "drug", "compound"]) or "drug_name"
-        col_cell = guess_col(df_gdsc, ["cell_line_name", "cell_line", "model_name"]) or "cell_line_name"
-        col_ic50 = guess_col(df_gdsc, ["ic50_um", "ic50", "ln_ic50"]) or "ic50_um"
-        col_tcga = guess_col(df_gdsc, ["tcga_classification", "tcga", "cancer_type"]) or "tcga_classification"
-        col_depmap_in_gdsc = guess_col(df_gdsc, ["depmap_id", "depmapid", "modelid"])  # may be None
-
-        # Filter GDSC by drug & cancer type
-        df_g = df_gdsc[df_gdsc[col_drug].astype(str).str.upper() == drug_name.upper()].copy()
-        if col_tcga in df_g.columns and pd.notnull(cancer_type):
-            df_g = df_g[df_g[col_tcga].astype(str).str.upper() == str(cancer_type).upper()].copy()
-        if df_g.empty:
-            st.error("No GDSC rows found after filtering by Drug/Cancer type.")
-            st.stop()
-
-        # Ensure depmap_id exists in df_g
-        if not col_depmap_in_gdsc:
-            if df_map is None:
-                st.warning("DepMap_ID not found in GDSC; please upload mapper. Proceeding without join may reduce accuracy.")
-            else:
-                map_cell = guess_col(df_map, ["cell_line_name", "cell", "model_name"]) or "cell_line_name"
-                map_depmap = guess_col(df_map, ["depmap_id", "depmapid", "modelid"]) or "depmap_id"
-                df_g = df_g.merge(
-                    df_map[[map_cell, map_depmap]].drop_duplicates(),
-                    left_on=col_cell,
-                    right_on=map_cell,
-                    how="left",
-                )
-                if "depmap_id" not in df_g.columns and map_depmap in df_g.columns:
-                    df_g.rename(columns={map_depmap: "depmap_id"}, inplace=True)
-        else:
-            if col_depmap_in_gdsc != "depmap_id":
-                df_g.rename(columns={col_depmap_in_gdsc: "depmap_id"}, inplace=True)
-
-        if "depmap_id" not in df_g.columns:
-            st.error("DepMap ID could not be resolved in filtered GDSC table. Upload a mapper with cell line → DepMap_ID.")
-            st.stop()
-
-        # Build mutation status
-        if subset_mode == "Single gene":
-            mut_status = build_mutation_status_single(df_mut, gene_name)
-            df_join = df_g.merge(mut_status, on="depmap_id", how="left")
-            df_join["mutwt"] = df_join["mutwt"].fillna("WT")
-            group_col = "mutwt"
-            title_suffix = f"{gene_name} Mut (red) vs WT (blue)"
-            color_map = {"MUT": "red", "WT": "blue"}
-            if only_and:
-                # In single-gene mode, only_and behaves as show only MUT
-                df_join = df_join[df_join[group_col] == "MUT"].copy()
-        else:
-            # Multi-gene AND
-            mut_multi = build_mutation_status_multi(df_mut, selected_genes)
-            df_join = df_g.merge(mut_multi, on="depmap_id", how="left")
-            df_join["mut_and"] = df_join["mut_and"].fillna(False)
-            group_col = "mut_and"
-            title_suffix = f"{' + '.join(selected_genes)} AND-MUT (red) vs others (blue)"
-            color_map = {True: "red", False: "blue"}
-            if only_and:
-                df_join = df_join[df_join[group_col] == True].copy()
-
-        # Output table
-        out_cols = [c for c in [col_cell, "depmap_id", col_ic50, group_col] if c in df_join.columns]
-        st.subheader("Filtered IC50 table")
-        st.dataframe(df_join[out_cols].sort_values(col_ic50, ascending=True), use_container_width=True)
-
-        # Plot
-        st.subheader("IC50 distribution by subset")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        plot_df = df_join[[col_cell, col_ic50, group_col]].dropna().sort_values(col_ic50)
-        colors = plot_df[group_col].map(color_map).fillna("blue")
-        ax.bar(plot_df[col_cell].astype(str), plot_df[col_ic50], color=colors)
-        ax.set_xlabel("Cell line")
-        ax.set_ylabel("IC50 (uM)")
-        ax.set_title(f"{drug_name} in {cancer_type} cell lines — {title_suffix}")
-        ax.tick_params(axis='x', rotation=75)
-        st.pyplot(fig)
-
-        # Debug section
-        with st.expander("📄 Debug notes"):
-            st.write("Rows plotted:", len(plot_df))
-            st.write("Unique DepMap IDs:", plot_df.shape[0])
-            if subset_mode == "Multi-gene (AND)":
-                st.write("Selected genes:", selected_genes)
-                cols_present = [c for c in df_join.columns if c.startswith("status_")]
-                st.write("Per-gene status columns present:", cols_present)
-
-        st.success("Done. If something looks off, expand the inspection panels above to verify column mappings.")
-
-    except Exception as e:
-        st.error(f"Runtime error: {e}")
+# Drop NA and collapse duplicates by median per (Drug, DepMap_ID) or (Drug, CellLine)
+work = joined.dropna(subset=["IC50_uM"]).copy()
+if "DepMap_ID" in work.columns and work["DepMap_ID"].notna().any():
+    grp_keys = ["Drug_Name", "DepMap_ID"] if "Drug_Name" in work.columns else ["DepMap_ID"]
 else:
-    st.info("Upload files on the left (Advanced mode) or use built-in data (Lite mode), set parameters, choose subset mode, and click **Run**.")
+    grp_keys = ["Drug_Name", "CellLine"] if "Drug_Name" in work.columns else ["CellLine"]
 
-st.markdown("---")
-st.caption("SO-06c debug strategy: column auto-inspection + robust DepMap_ID alignment + single/multi-gene subset logic (AND). Versions — GDSC1 (downloaded 2025-09), CCLE mutation (DepMap 22Q2), Model mapper (DepMap 25Q2).")
+before = len(work)
 
+def _agg(g: pd.DataFrame) -> pd.Series:
+    s = pd.Series({
+        "IC50_uM": g["IC50_uM"].astype(float).median(),
+        "Mut": bool(g.get("Mut", pd.Series([False])).any()),
+        "CellLine": g.get("CellLine", pd.Series([None])).iloc[0],
+        "TCGA_Classification": g.get("TCGA_Classification", pd.Series([None])).iloc[0],
+        "DepMap_ID": g.get("DepMap_ID", pd.Series([None])).iloc[0],
+        "Drug_Name": g.get("Drug_Name", pd.Series([None])).iloc[0],
+        "_dup_count": len(g),
+    })
+    return s
+
+plot_df = work.groupby(grp_keys, as_index=False).apply(_agg).reset_index(drop=True)
+after = len(plot_df)
+collapsed = max(0, before - after)
+
+# Sort & trim
+plot_df = plot_df.sort_values(by=["IC50_uM"], ascending=True).head(int(top_n))
+
+# Diagnostics
+st.subheader("Diagnostics")
+try:
+    total = int(len(plot_df))
+    depmap_matched = int(plot_df["DepMap_ID"].notna().sum()) if "DepMap_ID" in plot_df.columns else 0
+    mut_count = int(plot_df.get("Mut", pd.Series(dtype=bool)).sum()) if "Mut" in plot_df.columns else 0
+    st.markdown(f"**Rows:** {total} | **DepMap_ID matched:** {depmap_matched} | **Mutants:** {mut_count} | **Collapsed duplicates:** {collapsed}")
+except Exception:
+    pass
+
+# Filtered table (median-collapsed)
+st.subheader("Filtered table (Median‑collapsed)")
+show_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","IC50_uM","Mut"] if c in plot_df.columns]
+st.dataframe(plot_df[show_cols], use_container_width=True, hide_index=True)
+
+# Raw replicates (optional)
+with st.expander("Show raw replicates (before collapsing)"):
+    raw_cols = [c for c in ["Drug_Name","CellLine","DepMap_ID","TCGA_Classification","IC50_uM","Mut"] if c in joined.columns]
+    st.dataframe(joined[raw_cols], use_container_width=True, hide_index=True)
+
+# Plot
+st.subheader("IC50 distribution (lower is more sensitive)")
+if plot_df.empty:
+    st.warning("No rows to plot. Try broadening filters or check dataset mappings.")
+else:
+    fig, ax = plt.subplots(figsize=(12, 5))
+    x_labels = plot_df.get("CellLine", plot_df.get("DepMap_ID", pd.Series(range(len(plot_df)))))
+    y = plot_df["IC50_uM"].astype(float)
+    colors = ["red" if bool(m) else "blue" for m in plot_df.get("Mut", pd.Series(False, index=plot_df.index))]
+    ax.bar(x_labels.astype(str), y, color=colors)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(color="red", label="Mutant"), Patch(color="blue", label="WT")])
+    ax.set_ylabel("IC50 (µM)")
+    ax.set_xlabel("Cell line")
+    title_drug = drug_query if drug_query else "(all drugs)"
+    title_tcga = ", ".join(tumors) if tumors else "All TCGA"
+    ax.set_title(f"{title_drug} — {title_tcga} — Gene: {gene}")
+    ax.tick_params(axis='x', labelrotation=90)
+    st.pyplot(fig, clear_figure=True)
