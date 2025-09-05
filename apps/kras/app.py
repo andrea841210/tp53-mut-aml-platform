@@ -1,5 +1,5 @@
 # Node-1 IC50 Explorer • Solid Tumors (KRAS track)
-# Streamlit app skeleton v0.10 — Broaden NSCLC mapping + Tumor mapping diagnostics
+# Streamlit app skeleton v0.11 — Switch to TCGA_Classification direct filter + right-side TCGA code reference
 
 from __future__ import annotations
 import os
@@ -224,7 +224,8 @@ def mutated_depmap_ids(ccle: pd.DataFrame, gene: str) -> Set[str]:
 with st.sidebar:
     st.header("Filters")
     gene = st.selectbox("Gene", DEFAULT_GENES, index=0)
-    tumors = st.multiselect("Cancer types", DEFAULT_TUMORS, default=[DEFAULT_TUMORS[0]])
+    tcga_classes = sorted([c for c in models.get("TCGA_Classification", models.get("tcga_classification", pd.Series())).dropna().unique()])
+tumors = st.multiselect("TCGA Classification (direct)", tcga_classes, default=[]) 
     drug_query = st.text_input("Drug name contains (optional)", value="")
     top_n = st.number_input("Top N bars to show", min_value=10, max_value=200, value=200, step=10)
     run_button = st.button("Run")
@@ -243,20 +244,18 @@ except Exception as e:
 
 joined = build_gdsc_joined(gdsc, models)
 
-# Tumor mapping diagnostics BEFORE filters
-with st.expander("Tumor mapping summary (before filters)", expanded=False):
-    try:
-        tmp = build_gdsc_joined(gdsc, models)  # fresh build to avoid mutation
-        col1, col2 = st.columns(2)
-        with col1:
-            if "TCGA_Classification" in tmp.columns:
-                st.write("TCGA_Classification top values:")
-                st.dataframe(tmp["TCGA_Classification"].value_counts().head(20))
-        with col2:
-            if "TumorGroup" in tmp.columns:
-                st.write("Mapped TumorGroup counts:")
-                st.dataframe(tmp["TumorGroup"].value_counts())
-    except Exception as _:
+# TCGA code reference table (right side)
+with st.expander("TCGA code reference (common groups)", expanded=False):
+    st.markdown("""
+    - **LUAD** = Lung adenocarcinoma (subset of NSCLC)  
+    - **LUSC** = Lung squamous cell carcinoma (subset of NSCLC)  
+    - **COREAD** = Colorectal adenocarcinoma (CRC)  
+    - **BRCA** = Breast invasive carcinoma  
+    - **SKCM** = Skin cutaneous melanoma  
+    - **GBM** = Glioblastoma multiforme  
+    - **PAAD** = Pancreatic adenocarcinoma (PDAC)
+    """)
+except Exception as _: 
         pass
 if tumors:
     joined = joined[joined["TumorGroup"].isin(tumors)]
@@ -351,3 +350,4 @@ else:
     st.pyplot(fig, clear_figure=True)
 
 st.caption("Notes: Mut=any variant recorded in CCLE 22Q2 for the selected gene; TumorGroup is inferred. If DepMap_ID missing in GDSC1, normalized cell-line name join is used.")
+
