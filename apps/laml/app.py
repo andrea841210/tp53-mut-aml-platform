@@ -152,7 +152,8 @@ else:
 # Shared inputs
 col_a, col_b = st.sidebar.columns(2)
 with col_a:
-    drug_name = st.text_input("Drug name", value="Rapamycin")
+    drug_name = st.text_input("Drug name", value="Rapamycin", help="Enter drug names without dashes (e.g., AZD8055, not AZD-8055)")
+    st.caption("Tip: Please enter drug names without dashes (e.g., AZD8055, not AZD-8055).")
 with col_b:
     only_and = st.checkbox("Only show AND-mutant lines", value=False)
 
@@ -212,11 +213,6 @@ if run:
             df_map, map_map = normalize_columns(df_map_raw)
         else:
             df_map, map_map = None, None
-
-        summarize_columns("GDSC table", df_gdsc, map_gdsc)
-        summarize_columns("Mutation table", df_mut, map_mut)
-        if df_map is not None:
-            summarize_columns("Mapper table", df_map, map_map)
 
         # Identify key columns
         col_drug = guess_col(df_gdsc, ["drug_name", "drug", "compound"]) or "drug_name"
@@ -278,12 +274,8 @@ if run:
             if only_and:
                 df_join = df_join[df_join[group_col] == True].copy()
 
-        # Output table
-        out_cols = [c for c in [col_cell, "depmap_id", col_ic50, group_col] if c in df_join.columns]
-        st.subheader("Filtered IC50 table")
-        st.dataframe(df_join[out_cols].sort_values(col_ic50, ascending=True), use_container_width=True)
-
-        # Plot
+        # ======== DISPLAY ORDER: Plot → Table → Inspections ========
+        # Plot first (demo-first)
         st.subheader("IC50 distribution by subset")
         fig, ax = plt.subplots(figsize=(10, 5))
         plot_df = df_join[[col_cell, col_ic50, group_col]].dropna().sort_values(col_ic50)
@@ -295,7 +287,18 @@ if run:
         ax.tick_params(axis='x', rotation=75)
         st.pyplot(fig)
 
-        # Debug section
+        # Then the filtered table
+        out_cols = [c for c in [col_cell, "depmap_id", col_ic50, group_col] if c in df_join.columns]
+        st.subheader("Filtered IC50 table")
+        st.dataframe(df_join[out_cols].sort_values(col_ic50, ascending=True), use_container_width=True)
+
+        # Finally the inspection blocks (debug-last)
+        summarize_columns("GDSC table", df_gdsc, map_gdsc)
+        summarize_columns("Mutation table", df_mut, map_mut)
+        if df_map is not None:
+            summarize_columns("Mapper table", df_map, map_map)
+
+        # Debug notes
         with st.expander("📄 Debug notes"):
             st.write("Rows plotted:", len(plot_df))
             st.write("Unique DepMap IDs:", plot_df.shape[0])
@@ -304,7 +307,7 @@ if run:
                 cols_present = [c for c in df_join.columns if c.startswith("status_")]
                 st.write("Per-gene status columns present:", cols_present)
 
-        st.success("Done. If something looks off, expand the inspection panels above to verify column mappings.")
+        st.success("Done. If something looks off, expand the inspection panels below to verify column mappings.")
 
     except Exception as e:
         st.error(f"Runtime error: {e}")
